@@ -306,11 +306,14 @@ class AppTraceApi(Resource):
         parser.add_argument('tracing_provider', type=str, required=True, location='json')
         args = parser.parse_args()
 
-        OpsTraceService.update_app_tracing_config(
-            app_id=app_id,
-            enabled=args['enabled'],
-            tracing_provider=args['tracing_provider'],
-        )
+        try:
+            OpsTraceService.update_app_tracing_config(
+                app_id=app_id,
+                enabled=args['enabled'],
+                tracing_provider=args['tracing_provider'],
+            )
+        except Exception as e:
+            raise e
 
         return {"result": "success"}
 
