@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from enum import Enum
@@ -8,14 +9,17 @@ from langsmith import Client
 from pydantic import BaseModel, Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
+from core.helper.encrypter import decrypt_token, encrypt_token, obfuscated_token
 from core.moderation.base import ModerationInputsResult
 from extensions.ext_database import db
 from models.dataset import Document
 from models.model import Message, MessageAgentThought, MessageFile
 from models.workflow import WorkflowNodeExecution, WorkflowRun
 from services.ops_trace.base_trace_instance import BaseTraceInstance
-from services.ops_trace.utils import filter_none_values
+from services.ops_trace.model import LangSmithConfig
+from services.ops_trace.utils import filter_none_values, replace_text_with_content
 
+logger = logging.getLogger(__name__)
 
 class LangSmithRunType(str, Enum):
     tool = "tool"
@@ -90,21 +94,52 @@ class LangSmithRunModel(LangSmithTokenUsage, LangSmithMultiModel):
         }
         file_list = values.get("file_list", [])
         if isinstance(v, str):
-            return {
-                field_name: v,
-                "file_list": file_list,
-                "usage_metadata": usage_metadata,
-            }
-        elif isinstance(v, list):
-            if len(v) > 0 and isinstance(v[0], dict):
-                data = {
-                    "message": v,
-                    "usage_metadata": usage_metadata,
-                    "file_list": file_list,
+            if field_name == "inputs":
+                return {
+                    "messages": {
+                        "role": "user",
+                        "content": v,
+                        "usage_metadata": usage_metadata,
+                        "file_list": file_list,
+                    },
                 }
+            elif field_name == "outputs":
+                return {
+                    "choices": {
+                        "role": "ai",
+                        "content": v,
+                        "usage_metadata": usage_metadata,
+                        "file_list": file_list,
+                    },
+                }
+        elif isinstance(v, list):
+            data = {}
+            if len(v) > 0 and isinstance(v[0], dict):
+                # rename text to content
+                v = replace_text_with_content(data=v)
+                if field_name == "inputs":
+                    data = {
+                        "messages": v,
+                    }
+                elif field_name == "outputs":
+                    data = {
+                        "choices": {
+                            "role": "ai",
+                            "content": v,
+                            "usage_metadata": usage_metadata,
+                            "file_list": file_list,
+                        },
+                    }
                 return data
             else:
-                return {field_name: v}
+                return {
+                    "choices": {
+                        "role": "ai" if field_name == "outputs" else "user",
+                        "content": str(v),
+                        "usage_metadata": usage_metadata,
+                        "file_list": file_list,
+                    },
+                }
         if isinstance(v, dict):
             v["usage_metadata"] = usage_metadata
             v["file_list"] = file_list
@@ -218,7 +253,7 @@ class LangSmithDataTrace(BaseTraceInstance):
         workflow_nodes_executions = (
             db.session.query(WorkflowNodeExecution)
             .filter(WorkflowNodeExecution.workflow_run_id == workflow_run_id)
-            .order_by(WorkflowNodeExecution.created_at)
+            .order_by(WorkflowNodeExecution.index.desc())
             .all()
         )
 
@@ -234,7 +269,9 @@ class LangSmithDataTrace(BaseTraceInstance):
                 json.loads(node_execution.outputs) if node_execution.outputs else {}
             )
             created_at = node_execution.created_at if node_execution.created_at else datetime.now()
-            finished_at = node_execution.finished_at if node_execution.finished_at else datetime.now()
+            elapsed_time = node_execution.elapsed_time
+            finished_at = created_at + timedelta(seconds=elapsed_time)
+
             execution_metadata = (
                 json.loads(node_execution.execution_metadata)
                 if node_execution.execution_metadata
@@ -316,7 +353,7 @@ class LangSmithDataTrace(BaseTraceInstance):
             id=message_id,
             name=f"message_{message_id}",
             inputs=inputs,
-            run_type=LangSmithRunType.llm,
+            run_type=LangSmithRunType.chain,
             start_time=created_at,
             end_time=end_time,
             outputs=message_data.answer,
@@ -328,6 +365,27 @@ class LangSmithDataTrace(BaseTraceInstance):
             file_list=file_list,
         )
         self.add_run(message_run)
+
+        # create llm run parented to message run
+        llm_run = LangSmithRunModel(
+            input_tokens=message_tokens,
+            output_tokens=answer_tokens,
+            total_tokens=total_tokens,
+            name=f"llm_{message_id}",
+            inputs=inputs,
+            run_type=LangSmithRunType.llm,
+            start_time=created_at,
+            end_time=end_time,
+            outputs=message_data.answer,
+            extra={
+                "metadata": metadata,
+            },
+            parent_run_id=message_id,
+            tags=["llm", str(conversation_mode)],
+            error=error,
+            file_list=file_list,
+        )
+        self.add_run(llm_run)
 
     def moderation_trace(self, message_id: str, moderation_result: ModerationInputsResult, **kwargs):
         inputs = kwargs.get("inputs")
@@ -531,7 +589,7 @@ class LangSmithDataTrace(BaseTraceInstance):
         data = filter_none_values(data)
         try:
             self.langsmith_client.create_run(**data)
-            print("LangSmith Run created successfully.")
+            logger.debug("LangSmith Run created successfully.")
         except Exception as e:
             raise f"LangSmith Failed to create run: {str(e)}"
 
@@ -540,6 +598,31 @@ class LangSmithDataTrace(BaseTraceInstance):
         data = filter_none_values(data)
         try:
             self.langsmith_client.update_run(**data)
-            print("LangSmith Run updated successfully.")
+            logger.debug("LangSmith Run updated successfully.")
         except Exception as e:
             raise f"LangSmith Failed to update run: {str(e)}"
+
+    def api_check(self):
+        try:
+            random_project_name = f"test_project_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            self.langsmith_client.create_project(project_name=random_project_name)
+            self.langsmith_client.delete_project(project_name=random_project_name)
+            return True
+        except Exception as e:
+            logger.debug(f"LangSmith API check failed: {str(e)}")
+            return False
+
+    @classmethod
+    def obfuscate_config(cls, config: LangSmithConfig):
+        api_key = obfuscated_token(config.api_key)
+        return LangSmithConfig(api_key=api_key, project=config.project, endpoint=config.endpoint)
+
+    @classmethod
+    def encrypt_config(cls, tenant_id, config: LangSmithConfig):
+        api_key = encrypt_token(tenant_id, config.api_key)
+        return LangSmithConfig(api_key=api_key, project=config.project, endpoint=config.endpoint)
+
+    @classmethod
+    def decrypt_config(cls, tenant_id, config: LangSmithConfig):
+        api_key = decrypt_token(tenant_id, config.api_key)
+        return LangSmithConfig(api_key=api_key, project=config.project, endpoint=config.endpoint)
