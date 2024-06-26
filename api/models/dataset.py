@@ -143,6 +143,9 @@ class Dataset(db.Model):
 
     @staticmethod
     def gen_collection_name_by_id(dataset_id: str) -> str:
+        """
+        Generate collection name by dataset id.
+        """
         normalized_dataset_id = dataset_id.replace("-", "_")
         return f'Vector_index_{normalized_dataset_id}_Node'
 

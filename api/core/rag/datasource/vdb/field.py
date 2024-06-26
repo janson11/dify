@@ -2,6 +2,9 @@ from enum import Enum
 
 
 class Field(Enum):
+    """
+    Enum class for field names in RAG VDB
+    """
     CONTENT_KEY = "page_content"
     METADATA_KEY = "metadata"
     GROUP_KEY = "group_id"

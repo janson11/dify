@@ -27,6 +27,7 @@ def document_indexing_task(dataset_id: str, document_ids: list):
     dataset = db.session.query(Dataset).filter(Dataset.id == dataset_id).first()
 
     # check document limit
+    # 检查文档数量是否超出限制
     features = FeatureService.get_features(dataset.tenant_id)
     try:
         if features.billing.enabled:

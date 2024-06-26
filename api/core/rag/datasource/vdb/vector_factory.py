@@ -14,7 +14,13 @@ from models.dataset import Dataset, DatasetCollectionBinding
 
 
 class Vector:
+    """
+    向量工厂类，用于创建向量对象，并提供向量处理的接口
+    """
     def __init__(self, dataset: Dataset, attributes: list = None):
+        """
+        类的构造方法，类的实例化操作会自动调用该方法
+        """
         if attributes is None:
             attributes = ['doc_id', 'dataset_id', 'document_id', 'doc_hash']
         self._dataset = dataset
@@ -23,15 +29,20 @@ class Vector:
         self._vector_processor = self._init_vector()
 
     def _init_vector(self) -> BaseVector:
+        """
+        向量初始化
+        """
         config = current_app.config
         vector_type = config.get('VECTOR_STORE')
 
+        # 查询数据库表的datasets的配置信息，查询字段为index_struct，如果存在就使用配置的向量类型，否则使用默认的向量类型
         if self._dataset.index_struct_dict:
             vector_type = self._dataset.index_struct_dict['type']
 
         if not vector_type:
             raise ValueError("Vector store must be specified.")
 
+        # 根据向量类型，实例化对应的向量处理类
         if vector_type == "weaviate":
             from core.rag.datasource.vdb.weaviate.weaviate_vector import WeaviateConfig, WeaviateVector
             if self._dataset.index_struct_dict:
@@ -91,6 +102,8 @@ class Vector:
                     prefer_grpc=config.get('QDRANT_GRPC_ENABLED')
                 )
             )
+
+        # 向量数据库为milvus，初始化MilvusVector类
         elif vector_type == "milvus":
             from core.rag.datasource.vdb.milvus.milvus_vector import MilvusConfig, MilvusVector
             if self._dataset.index_struct_dict:
@@ -104,6 +117,7 @@ class Vector:
                     "vector_store": {"class_prefix": collection_name}
                 }
                 self._dataset.index_struct = json.dumps(index_struct_dict)
+            # 通过集合名称和配置信息实例化MilvusVector类
             return MilvusVector(
                 collection_name=collection_name,
                 config=MilvusConfig(
@@ -191,6 +205,11 @@ class Vector:
             raise ValueError(f"Vector store {config.get('VECTOR_STORE')} is not supported.")
 
     def create(self, texts: list = None, **kwargs):
+        """
+        向量创建接口，用于向向量数据库中插入向量数据
+        :param texts: 文本列表
+        :param kwargs: 其他参数
+        """
         if texts:
             embeddings = self._embeddings.embed_documents([document.page_content for document in texts])
             self._vector_processor.create(
@@ -200,6 +219,11 @@ class Vector:
             )
 
     def add_texts(self, documents: list[Document], **kwargs):
+        """
+        添加文本接口，用于向向量数据库中插入向量数据
+        :param documents: 文档列表
+        :param kwargs: 其他参数
+        """
         if kwargs.get('duplicate_check', False):
             documents = self._filter_duplicate_texts(documents)
         embeddings = self._embeddings.embed_documents([document.page_content for document in documents])
@@ -210,31 +234,63 @@ class Vector:
         )
 
     def text_exists(self, id: str) -> bool:
+        """
+        判断文本是否存在
+        :param id: 文档id
+        """
         return self._vector_processor.text_exists(id)
 
     def delete_by_ids(self, ids: list[str]) -> None:
+        """
+        根据id列表删除向量数据
+        :param ids: id列表
+        """
         self._vector_processor.delete_by_ids(ids)
 
     def delete_by_metadata_field(self, key: str, value: str) -> None:
+        """
+        根据元数据字段删除向量数据
+        :param key: 元数据字段名
+        :param value: 元数据字段值
+        """
         self._vector_processor.delete_by_metadata_field(key, value)
 
     def search_by_vector(
             self, query: str,
             **kwargs: Any
     ) -> list[Document]:
+        """
+        搜索向量接口，用于向向量数据库中搜索向量数据
+        :param query: 查询语句
+        :param kwargs: 其他参数
+        """
+        # 构造向量查询语句
         query_vector = self._embeddings.embed_query(query)
+        # 通过向量查询语句和其他参数进行向量搜索
         return self._vector_processor.search_by_vector(query_vector, **kwargs)
 
     def search_by_full_text(
             self, query: str,
             **kwargs: Any
     ) -> list[Document]:
+        """
+        全文搜索接口，用于向向量数据库中搜索向量数据
+        :param query: 查询语句
+        :param kwargs: 其他参数
+        """
         return self._vector_processor.search_by_full_text(query, **kwargs)
 
     def delete(self) -> None:
+        """
+        删除向量数据库
+        """
         self._vector_processor.delete()
 
     def _get_embeddings(self) -> Embeddings:
+        """
+        获取embedding对象
+        :return: embedding对象
+        """
         model_manager = ModelManager()
 
         embedding_model = model_manager.get_model_instance(
@@ -244,9 +300,15 @@ class Vector:
             model=self._dataset.embedding_model
 
         )
+        # 实例化CacheEmbedding类
         return CacheEmbedding(embedding_model)
 
     def _filter_duplicate_texts(self, texts: list[Document]) -> list[Document]:
+        """
+        过滤重复文本
+        :param texts: 文本列表
+        :return: 过滤后的文本列表
+        """
         for text in texts:
             doc_id = text.metadata['doc_id']
             exists_duplicate_node = self.text_exists(doc_id)

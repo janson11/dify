@@ -6,7 +6,14 @@ from typing import Any
 from core.rag.models.document import Document
 
 
+
 class BaseVector(ABC):
+    """
+    Base class for vector based data sources.
+    This class provides an interface for creating, adding, searching, and deleting vectors.
+    向量数据源的基类，该类为创建、添加、搜索和删除向量提供了接口。
+    """
+
 
     def __init__(self, collection_name: str):
         self._collection_name = collection_name

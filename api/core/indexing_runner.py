@@ -638,6 +638,7 @@ class IndexingRunner:
               dataset_document: DatasetDocument, documents: list[Document]) -> None:
         """
         insert index and update document/segment status to completed
+        # 插入索引和更新文档/段状态为完成
         """
 
         embedding_model_instance = None
@@ -650,11 +651,13 @@ class IndexingRunner:
             )
 
         # chunk nodes by chunk size
+        # 按chunk大小分块节点
         indexing_start_at = time.perf_counter()
         tokens = 0
         chunk_size = 10
 
         # create keyword index
+        # 创建关键词索引
         create_keyword_thread = threading.Thread(target=self._process_keyword_index,
                                                  args=(current_app._get_current_object(),
                                                        dataset.id, dataset_document.id, documents))
@@ -664,6 +667,7 @@ class IndexingRunner:
                 futures = []
                 for i in range(0, len(documents), chunk_size):
                     chunk_documents = documents[i:i + chunk_size]
+                    # 提交任务到线程池异步处理
                     futures.append(executor.submit(self._process_chunk, current_app._get_current_object(), index_processor,
                                                    chunk_documents, dataset,
                                                    dataset_document, embedding_model_instance))
@@ -675,6 +679,7 @@ class IndexingRunner:
         indexing_end_at = time.perf_counter()
 
         # update document status to completed
+        # 更新文档状态为完成
         self._update_document_index_status(
             document_id=dataset_document.id,
             after_indexing_status="completed",
